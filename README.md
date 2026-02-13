@@ -1,11 +1,12 @@
 # Planka Telegram Bot
 
-Simple Telegram bot with Python, FastAPI, aiogram, and Planka integration.
+Telegram bot with Python, aiogram, and Planka integration. Uses long-polling to receive updates.
 
 ## What you need
 
 - Telegram bot token from @BotFather
 - Planka URL + credentials
+- PostgreSQL (for short-id mappings)
 - Docker + Docker Compose plugin
 - `make`
 
@@ -16,6 +17,8 @@ Copy env file and fill values:
 ```bash
 cp .env.example .env
 ```
+
+Required: `BOT_TOKEN`, `DATABASE_URL`, `PLANKA_*`. For Planka action notifications to Telegram, set `TELEGRAM_NOTIFICATION_CHAT_IDS` and `PLANKA_BOARD_ID` (use `scripts/discover_chats.py` to find chat IDs).
 
 ## 2) Deploy on server (simple)
 
@@ -46,8 +49,10 @@ uv run python -m app.polling
 - `/boards` — list Planka boards
 - `/todo` — list TODO tasks
 - `/todo {name}` — create a task (supports multi-line checklist items and photo attachments)
+- `/task {id}` — show full task details (title, description, checklist, images)
 - `/doing {id}` — move task to IN PROGRESS
 - `/done {id}` — move task to DONE
+- `/backtodo {id}` — move task back to TODO
 
 ## Notes
 
