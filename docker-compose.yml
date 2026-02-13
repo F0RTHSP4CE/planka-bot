@@ -1,0 +1,27 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: planka-bot-postgres
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-planka_bot}
+      POSTGRES_USER: ${POSTGRES_USER:-planka_bot}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    volumes:
+      - planka-bot-postgres-data:/var/lib/postgresql/data
+    restart: unless-stopped
+
+  bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: planka-bot
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-planka_bot}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-planka_bot}
+    depends_on:
+      - postgres
+    restart: unless-stopped
+
+volumes:
+  planka-bot-postgres-data:
