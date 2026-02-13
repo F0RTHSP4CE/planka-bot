@@ -7,6 +7,7 @@ from app.config import Settings
 from app.db.mappings import CardMappingsRepository
 from app.db.pool import close_engine, create_engine, create_session_factory, ensure_schema
 from app.integrations.planka_client import PlankaClient
+from app.poller import run_action_poller
 
 
 def configure_logging() -> None:
@@ -38,6 +39,10 @@ async def run_polling() -> None:
     # Polling mode does not need public webhook URL; clear webhook first.
     await bot.delete_webhook(drop_pending_updates=False)
 
+    poller_task: asyncio.Task | None = None
+    if settings.get_notification_targets() and settings.planka_board_id:
+        poller_task = asyncio.create_task(run_action_poller(bot, planka, settings))
+
     try:
         await dispatcher.start_polling(
             bot,
@@ -46,6 +51,12 @@ async def run_polling() -> None:
             mappings=mappings,
         )
     finally:
+        if poller_task is not None:
+            poller_task.cancel()
+            try:
+                await poller_task
+            except asyncio.CancelledError:
+                pass
         await planka.close()
         await close_engine(engine)
         await bot.session.close()

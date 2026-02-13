@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 import httpx
+
+logger = logging.getLogger(__name__)
 
 
 class PlankaClientError(Exception):
@@ -99,13 +102,23 @@ class PlankaClient:
         payload: dict[str, Any] = {
             "name": name,
             "type": card_type,
-            # Some Planka deployments require an explicit position on create.
-            "position": 65535.0,
+            # Position 0 = top of list; 65535 = end.
+            "position": 0.0,
         }
         if description:
             payload["description"] = description
         data = await self._post_json(f"/api/lists/{list_id}/cards", payload=payload)
         return _extract_item(data)
+
+    async def get_list(self, list_id: str) -> dict[str, Any] | None:
+        """Fetch list details (may include boardId)."""
+        try:
+            payload = await self._get_json(f"/api/lists/{list_id}")
+            if isinstance(payload, dict):
+                return payload.get("item") or payload
+            return None
+        except PlankaClientError:
+            return None
 
     async def get_cards(self, list_id: str) -> list[dict[str, Any]]:
         payload = await self._get_json(f"/api/lists/{list_id}/cards")
@@ -114,13 +127,44 @@ class PlankaClient:
             return items
         return []
 
-    async def move_card(self, card_id: str, list_id: str) -> dict[str, Any]:
+    async def get_card(self, card_id: str) -> dict[str, Any] | None:
+        """Fetch single card with full details (name, description, task lists, tasks, attachments).
+
+        Returns the full API response: {item: card, included: {taskLists, tasks, attachments, ...}}.
+        Planka has no separate GET for task-lists or attachments; they come from card show.
+        """
+        try:
+            payload = await self._get_json(f"/api/cards/{card_id}")
+            if isinstance(payload, dict):
+                return payload
+            return None
+        except PlankaClientError:
+            return None
+
+    async def download_attachment(self, attachment_id: str) -> bytes | None:
+        """Download attachment file bytes (for images)."""
+        try:
+            client = self._require_client()
+            response = await client.get(f"/api/attachments/{attachment_id}/file")
+            if response.is_error:
+                return None
+            return response.content
+        except httpx.HTTPError:
+            return None
+
+    async def move_card(
+        self,
+        card_id: str,
+        list_id: str,
+        *,
+        position: float | None = None,
+    ) -> dict[str, Any]:
+        pos = position if position is not None else 65535.0
         data = await self._patch_json(
             f"/api/cards/{card_id}",
             payload={
                 "listId": list_id,
-                # Required by some Planka deployments when moving cards.
-                "position": 65535.0,
+                "position": pos,
             },
         )
         return _extract_item(data)
@@ -154,6 +198,16 @@ class PlankaClient:
             },
         )
         return _extract_item(data)
+
+    async def get_board_actions(
+        self,
+        board_id: str,
+        before_id: str | None = None,
+    ) -> dict[str, Any]:
+        path = f"/api/boards/{board_id}/actions"
+        if before_id:
+            path = f"{path}?beforeId={before_id}"
+        return await self._get_json(path)
 
     async def create_attachment(
         self,
@@ -223,6 +277,16 @@ class PlankaClient:
         try:
             return response.json()
         except ValueError as exc:
+            url = getattr(response.request, "url", None) or "?"
+            content_type = response.headers.get("content-type", "unknown")
+            body_preview = response.text[:500] if response.text else "(empty)"
+            logger.warning(
+                "Planka API returned invalid JSON: url=%s status=%s content_type=%s body_preview=%r",
+                url,
+                response.status_code,
+                content_type,
+                body_preview,
+            )
             raise PlankaClientError("Planka API returned invalid JSON") from exc
 
     def _require_client(self) -> httpx.AsyncClient:

@@ -36,19 +36,8 @@ sudo make down
 
 ```bash
 uv sync
-uv run uvicorn app.main:app --app-dir src --host 0.0.0.0 --port 8000 --reload
-```
-
-### Local Telegram testing without ngrok (polling mode)
-
-Use this when you want to test commands from Telegram locally and do not want webhooks:
-
-```bash
 uv run python -m app.polling
 ```
-
-Notes:
-- Keep only one bot process running (webhook server or polling, not both).
 
 ## Bot commands
 

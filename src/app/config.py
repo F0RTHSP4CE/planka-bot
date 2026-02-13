@@ -4,7 +4,6 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     bot_token: str = Field(alias="BOT_TOKEN")
-    webhook_secret: str | None = Field(default=None, alias="WEBHOOK_SECRET")
     database_url: str | None = Field(default=None, alias="DATABASE_URL")
 
     planka_base_url: AnyHttpUrl = Field(alias="PLANKA_BASE_URL")
@@ -16,6 +15,15 @@ class Settings(BaseSettings):
     planka_done_list_id: str = Field(alias="PLANKA_DONE_LIST_ID")
     planka_request_timeout_seconds: float = 10.0
 
+    telegram_notification_chat_id: str | None = Field(default=None, alias="TELEGRAM_NOTIFICATION_CHAT_ID")
+    telegram_notification_chat_ids: str | None = Field(
+        default=None,
+        alias="TELEGRAM_NOTIFICATION_CHAT_IDS",
+        description="Comma-separated: chat_id or chat_id:thread_id for topics",
+    )
+    planka_board_id: str | None = Field(default=None, alias="PLANKA_BOARD_ID")
+    planka_poll_interval_seconds: float = Field(default=5.0, alias="PLANKA_POLL_INTERVAL_SECONDS")
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
@@ -23,7 +31,19 @@ class Settings(BaseSettings):
         populate_by_name=True,
     )
 
-    @property
-    def webhook_path(self) -> str:
-        return "/telegram/webhook"
-
+    def get_notification_targets(self) -> list[tuple[str, int | None]]:
+        """Return [(chat_id, thread_id or None), ...] from TELEGRAM_NOTIFICATION_CHAT_IDS."""
+        targets: list[tuple[str, int | None]] = []
+        raw = self.telegram_notification_chat_ids or self.telegram_notification_chat_id
+        if raw:
+            for part in raw.split(","):
+                part = part.strip()
+                if ":" in part:
+                    cid, tid = part.split(":", 1)
+                    try:
+                        targets.append((cid.strip(), int(tid.strip())))
+                    except ValueError:
+                        targets.append((part, None))
+                else:
+                    targets.append((part, None))
+        return targets

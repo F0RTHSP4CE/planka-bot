@@ -1,13 +1,15 @@
 from __future__ import annotations
 
+import html
 import io
 import logging
 
 from aiogram import Router
 from aiogram.filters import Command
 from aiogram.filters.command import CommandObject
-from aiogram.types import Message
+from aiogram.types import BufferedInputFile, Message
 
+from app.bot_actions import register_bot_action
 from app.config import Settings
 from app.db.mappings import CardMappingsRepository
 from app.integrations.planka_client import PlankaAuthError, PlankaClient, PlankaClientError
@@ -35,8 +37,10 @@ async def help_command(message: Message) -> None:
         "/boards - List your Planka boards\n"
         "/todo {task_name} - Create a task in TODO\n"
         "/todo - List TODO tasks\n"
+        "/task {id} - Show full task details (title, description, checklist, images)\n"
         "/doing {id} - Move task to IN PROGRESS\n"
-        "/done {id} - Move task to DONE",
+        "/done {id} - Move task to DONE\n"
+        "/backtodo {id} - Move task back to TODO",
         parse_mode=None,
     )
 
@@ -66,6 +70,7 @@ async def todo_command(
                 await message.answer("Planka returned an invalid card response.", parse_mode=None)
                 return
             short_id = await mappings.get_or_create_short_id(card_id)
+            register_bot_action(card_id, "createCard")
 
             # Create checklist if items were provided
             items_created = 0
@@ -97,11 +102,7 @@ async def todo_command(
                 continue
             short_id = await mappings.get_or_create_short_id(card_id)
             name = str(card.get("name") or "Untitled")
-            description = str(card.get("description") or "").strip()
-            line = f"- {short_id} | {name}"
-            if description:
-                line = f"{line} - {description}"
-            lines.append(line)
+            lines.append(f"- {short_id} | {name}")
 
         if not lines:
             await message.answer("TODO list is empty.", parse_mode=None)
@@ -112,7 +113,7 @@ async def todo_command(
             "Planka authentication failed. Check PLANKA_USERNAME_OR_EMAIL and PLANKA_PASSWORD.",
             parse_mode=None,
         )
-    except PlankaClientError as exc:
+    except PlankaClientError:
         logger.exception("Failed to handle /todo command")
         error_text = str(exc)
         if "List not found" in error_text:
@@ -122,7 +123,7 @@ async def todo_command(
                 parse_mode=None,
             )
             return
-        await message.answer(f"Planka request failed: {exc}", parse_mode=None)
+        await message.answer("Planka request failed. Please try again.", parse_mode=None)
 
 
 @router.message(Command("doing"))
@@ -175,6 +176,127 @@ async def done_command(
     )
 
 
+@router.message(Command("backtodo"))
+async def backtodo_command(
+    message: Message,
+    command: CommandObject,
+    planka: PlankaClient,
+    mappings: CardMappingsRepository,
+    settings: Settings,
+) -> None:
+    args = (command.args or "").strip()
+    if not args:
+        await message.answer("Usage: /backtodo {id}", parse_mode=None)
+        return
+    await _move_task(
+        message=message,
+        input_id=args.split()[0],
+        target_list_id=settings.planka_todo_list_id,
+        done_message="moved back to TODO",
+        planka=planka,
+        mappings=mappings,
+        position_at_top=True,
+    )
+
+
+@router.message(Command("task"))
+async def task_command(
+    message: Message,
+    command: CommandObject,
+    planka: PlankaClient,
+    mappings: CardMappingsRepository,
+) -> None:
+    args = (command.args or "").strip()
+    logger.info("Received /task command args=%r", args)
+
+    if not args:
+        await message.answer("Usage: /task {id}", parse_mode=None)
+        return
+
+    input_id = args.split()[0]
+    card_id = await mappings.resolve_card_id(input_id)
+    if not card_id:
+        await message.answer(f"Task '{input_id}' was not found.", parse_mode=None)
+        return
+
+    try:
+        payload = await planka.get_card(card_id)
+        if not payload:
+            await message.answer(f"Task '{input_id}' was not found.", parse_mode=None)
+            return
+
+        card = payload.get("item") or payload
+        included = payload.get("included") or {}
+        task_lists = included.get("taskLists") or []
+        all_tasks = included.get("tasks") or []
+        attachments = included.get("attachments") or []
+
+        title = html.escape(str(card.get("name") or "Untitled"))
+        description = html.escape((card.get("description") or "").strip())
+
+        # Group tasks by taskListId
+        tasks_by_list: dict[str, list[dict]] = {}
+        for t in all_tasks:
+            tl_id = str(t.get("taskListId", ""))
+            if tl_id:
+                tasks_by_list.setdefault(tl_id, []).append(t)
+
+        checklist_lines: list[str] = []
+        for tl in task_lists:
+            tl_name = html.escape(str(tl.get("name") or "Checklist"))
+            tl_id = str(tl.get("id", ""))
+            if not tl_id:
+                continue
+            tasks = tasks_by_list.get(tl_id, [])
+            if not tasks:
+                checklist_lines.append(f"• {tl_name}: (empty)")
+            else:
+                items: list[str] = []
+                for t in tasks:
+                    name = html.escape(str(t.get("name") or ""))
+                    is_done = t.get("isCompleted", False)
+                    prefix = "☑" if is_done else "☐"
+                    items.append(f"  {prefix} {name}")
+                checklist_lines.append(f"• {tl_name}:")
+                checklist_lines.extend(items)
+        image_extensions = {".jpg", ".jpeg", ".png", ".gif", ".webp"}
+        image_attachments: list[tuple[str, str]] = []
+        for att in attachments:
+            att_id = str(att.get("id", ""))
+            name = str(att.get("name") or "").lower()
+            if att_id and any(name.endswith(ext) for ext in image_extensions):
+                image_attachments.append((att_id, name or "image.jpg"))
+
+        text_parts: list[str] = [f"<b>{title}</b>"]
+        if description:
+            text_parts.append(f"\n{description}")
+        if checklist_lines:
+            text_parts.append("\n<b>Checklist:</b>")
+            text_parts.extend(checklist_lines)
+
+        text = "\n".join(text_parts)
+        if text:
+            await message.answer(text, parse_mode="HTML")
+
+        for att_id, filename in image_attachments:
+            data = await planka.download_attachment(att_id)
+            if data:
+                try:
+                    await message.answer_photo(
+                        BufferedInputFile(data, filename=filename or "image.jpg"),
+                    )
+                except Exception:
+                    logger.exception("Failed to send attachment %s as photo", att_id)
+    except PlankaAuthError:
+        await message.answer(
+            "Planka authentication failed. Check PLANKA_USERNAME_OR_EMAIL and PLANKA_PASSWORD.",
+            parse_mode=None,
+        )
+    except PlankaClientError:
+        logger.exception("Failed to handle /task command")
+        await message.answer("Planka request failed. Please try again.", parse_mode=None)
+
+
 @router.message(Command("boards"))
 async def boards_command(message: Message, planka: PlankaClient, settings: Settings) -> None:
     if not settings.planka_username_or_email or not settings.planka_password:
@@ -189,8 +311,9 @@ async def boards_command(message: Message, planka: PlankaClient, settings: Setti
             parse_mode=None,
         )
         return
-    except PlankaClientError as exc:
-        await message.answer(f"Planka request failed: {exc}", parse_mode=None)
+    except PlankaClientError:
+        logger.exception("Failed to list boards")
+        await message.answer("Planka request failed. Please try again.", parse_mode=None)
         return
 
     if not boards:
@@ -288,6 +411,8 @@ async def _move_task(
     done_message: str,
     planka: PlankaClient,
     mappings: CardMappingsRepository,
+    *,
+    position_at_top: bool = False,
 ) -> None:
     try:
         card_id = await mappings.resolve_card_id(input_id)
@@ -295,13 +420,17 @@ async def _move_task(
             await message.answer(f"Task '{input_id}' was not found.", parse_mode=None)
             return
 
-        await planka.move_card(card_id=card_id, list_id=target_list_id)
+        kwargs: dict = {"card_id": card_id, "list_id": target_list_id}
+        if position_at_top:
+            kwargs["position"] = 0.0
+        await planka.move_card(**kwargs)
+        register_bot_action(card_id, "moveCard")
         await message.answer(f"{input_id} {done_message}", parse_mode=None)
     except PlankaAuthError:
         await message.answer(
             "Planka authentication failed. Check PLANKA_USERNAME_OR_EMAIL and PLANKA_PASSWORD.",
             parse_mode=None,
         )
-    except PlankaClientError as exc:
+    except PlankaClientError:
         logger.exception("Failed to move task", extra={"input_id": input_id})
-        await message.answer(f"Planka request failed: {exc}", parse_mode=None)
+        await message.answer("Planka request failed. Please try again.", parse_mode=None)

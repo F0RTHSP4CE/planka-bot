@@ -9,10 +9,11 @@ WORKDIR /app
 RUN pip install uv
 
 COPY pyproject.toml README.md ./
+COPY entrypoint.sh ./
 COPY src ./src
 
-RUN uv pip install --system .
+RUN uv pip install --system . && chmod +x entrypoint.sh
 
 EXPOSE 8000
 
-CMD ["uvicorn", "app.main:app", "--app-dir", "src", "--host", "0.0.0.0", "--port", "8000"]
+ENTRYPOINT ["./entrypoint.sh"]

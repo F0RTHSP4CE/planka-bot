@@ -7,9 +7,11 @@ from aiogram.filters.command import CommandObject
 from app.handlers.commands import (
     _build_create_reply,
     _parse_todo_args,
+    backtodo_command,
     doing_command,
     done_command,
     help_command,
+    task_command,
     todo_command,
 )
 
@@ -197,7 +199,7 @@ async def test_todo_command_without_args_returns_planka_list() -> None:
     message.answer.assert_awaited_once_with(
         "TODO tasks:\n"
         "- 1 | Prepare sprint sync\n"
-        "- 2 | Review onboarding flow - Critical",
+        "- 2 | Review onboarding flow",
         parse_mode=None,
     )
 
@@ -234,6 +236,39 @@ async def test_doing_command_without_task_id_returns_usage() -> None:
 
 
 @pytest.mark.asyncio
+async def test_backtodo_command_without_args_returns_usage() -> None:
+    message = _message_mock()
+    command = CommandObject(command="backtodo", args=None)
+    planka = AsyncMock()
+    mappings = AsyncMock()
+    settings = _settings()
+
+    await backtodo_command(message, command, planka=planka, mappings=mappings, settings=settings)
+
+    planka.move_card.assert_not_awaited()
+    message.answer.assert_awaited_once_with("Usage: /backtodo {id}", parse_mode=None)
+
+
+@pytest.mark.asyncio
+async def test_backtodo_command_moves_to_todo_list() -> None:
+    message = _message_mock()
+    command = CommandObject(command="backtodo", args="1001")
+    planka = AsyncMock()
+    mappings = AsyncMock()
+    mappings.resolve_card_id.return_value = "1573340758063187370"
+    settings = _settings()
+
+    await backtodo_command(message, command, planka=planka, mappings=mappings, settings=settings)
+
+    planka.move_card.assert_awaited_once_with(
+        card_id="1573340758063187370",
+        list_id="todo-list",
+        position=0.0,
+    )
+    message.answer.assert_awaited_once_with("1001 moved back to TODO", parse_mode=None)
+
+
+@pytest.mark.asyncio
 async def test_done_command_with_unknown_task_returns_not_found() -> None:
     message = _message_mock()
     command = CommandObject(command="done", args="999")
@@ -262,6 +297,74 @@ async def test_done_command_without_task_id_returns_usage() -> None:
 
 
 @pytest.mark.asyncio
+async def test_task_command_task_found() -> None:
+    message = AsyncMock()
+    message.answer = AsyncMock()
+    message.answer_photo = AsyncMock()
+    command = CommandObject(command="task", args="42")
+    planka = AsyncMock()
+    planka.get_card.return_value = {
+        "item": {
+            "id": "1573340758063187370",
+            "name": "Ship webhook wrappers",
+            "description": "Implement webhook handling",
+        },
+        "included": {
+            "taskLists": [{"id": "tl-1", "name": "Checklist"}],
+            "tasks": [
+                {"id": "t1", "name": "Setup endpoint", "isCompleted": True, "taskListId": "tl-1"},
+                {"id": "t2", "name": "Add tests", "isCompleted": False, "taskListId": "tl-1"},
+            ],
+            "attachments": [],
+        },
+    }
+    mappings = AsyncMock()
+    mappings.resolve_card_id.return_value = "1573340758063187370"
+
+    await task_command(message, command, planka=planka, mappings=mappings)
+
+    mappings.resolve_card_id.assert_awaited_once_with("42")
+    planka.get_card.assert_awaited_once_with("1573340758063187370")
+    message.answer.assert_awaited_once()
+    payload = message.answer.await_args.args[0]
+    assert "Ship webhook wrappers" in payload
+    assert "Implement webhook handling" in payload
+    assert "Checklist" in payload
+    assert "Setup endpoint" in payload
+    assert "Add tests" in payload
+    message.answer_photo.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_task_command_task_not_found() -> None:
+    message = AsyncMock()
+    message.answer = AsyncMock()
+    command = CommandObject(command="task", args="999")
+    planka = AsyncMock()
+    mappings = AsyncMock()
+    mappings.resolve_card_id.return_value = None
+
+    await task_command(message, command, planka=planka, mappings=mappings)
+
+    planka.get_card.assert_not_awaited()
+    message.answer.assert_awaited_once_with("Task '999' was not found.", parse_mode=None)
+
+
+@pytest.mark.asyncio
+async def test_task_command_without_args_returns_usage() -> None:
+    message = AsyncMock()
+    message.answer = AsyncMock()
+    command = CommandObject(command="task", args=None)
+    planka = AsyncMock()
+    mappings = AsyncMock()
+
+    await task_command(message, command, planka=planka, mappings=mappings)
+
+    planka.get_card.assert_not_awaited()
+    message.answer.assert_awaited_once_with("Usage: /task {id}", parse_mode=None)
+
+
+@pytest.mark.asyncio
 async def test_help_command_includes_wrapper_commands() -> None:
     message = _message_mock()
 
@@ -270,5 +373,7 @@ async def test_help_command_includes_wrapper_commands() -> None:
     message.answer.assert_awaited_once()
     payload = message.answer.await_args.args[0]
     assert "/todo {task_name} - Create a task in TODO" in payload
+    assert "/task {id} - Show full task details" in payload
     assert "/doing {id} - Move task to IN PROGRESS" in payload
     assert "/done {id} - Move task to DONE" in payload
+    assert "/backtodo {id} - Move task back to TODO" in payload
