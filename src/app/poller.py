@@ -76,7 +76,7 @@ async def run_action_poller(
                     continue
 
                 card_id = str(action.get("cardId", ""))
-                consume_if_bot_action(card_id, action.get("type", ""))
+                tg_author = consume_if_bot_action(card_id, action.get("type", ""))
 
                 for chat_id, thread_id in targets:
                     try:
@@ -89,6 +89,7 @@ async def run_action_poller(
                             board_name="TASKS",
                             message_thread_id=thread_id,
                             allowed_chat_ids=allowed_chat_ids,
+                            author_override=tg_author,
                         )
                     except Exception:
                         logger.exception(

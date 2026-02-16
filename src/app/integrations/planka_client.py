@@ -141,11 +141,11 @@ class PlankaClient:
         except PlankaClientError:
             return None
 
-    async def download_attachment(self, attachment_id: str) -> bytes | None:
+    async def download_attachment(self, attachment_id: str, filename: str) -> bytes | None:
         """Download attachment file bytes (for images)."""
         try:
             client = self._require_client()
-            response = await client.get(f"/api/attachments/{attachment_id}/file")
+            response = await client.get(f"/attachments/{attachment_id}/download/{filename}")
             if response.is_error:
                 return None
             return response.content

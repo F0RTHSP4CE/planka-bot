@@ -20,6 +20,16 @@ _TELEGRAM_MAX_MESSAGE_LENGTH = 4096
 _CHECKLIST_POSITION_STEP = 65536.0
 
 
+def _telegram_author(message: Message) -> str:
+    """Build a display name from the Telegram user who sent the message."""
+    user = message.from_user
+    if user and user.username:
+        return f"@{user.username}"
+    if user and user.first_name:
+        return user.first_name
+    return "Someone"
+
+
 @router.message(Command("start"))
 async def start_command(message: Message) -> None:
     await message.answer(
@@ -70,7 +80,7 @@ async def todo_command(
                 await message.answer("Planka returned an invalid card response.", parse_mode=None)
                 return
             short_id = await mappings.get_or_create_short_id(card_id)
-            register_bot_action(card_id, "createCard")
+            register_bot_action(card_id, "createCard", _telegram_author(message))
 
             # Create checklist if items were provided
             items_created = 0
@@ -279,7 +289,7 @@ async def task_command(
             await message.answer(text, parse_mode="HTML")
 
         for att_id, filename in image_attachments:
-            data = await planka.download_attachment(att_id)
+            data = await planka.download_attachment(att_id, filename)
             if data:
                 try:
                     await message.answer_photo(
@@ -424,7 +434,7 @@ async def _move_task(
         if position_at_top:
             kwargs["position"] = 0.0
         await planka.move_card(**kwargs)
-        register_bot_action(card_id, "moveCard")
+        register_bot_action(card_id, "moveCard", _telegram_author(message))
         await message.answer(f"{input_id} {done_message}", parse_mode=None)
     except PlankaAuthError:
         await message.answer(

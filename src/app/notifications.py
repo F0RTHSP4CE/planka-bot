@@ -61,6 +61,7 @@ async def format_and_send(
     message_thread_id: int | None = None,
     *,
     allowed_chat_ids: frozenset[str] | None = None,
+    author_override: str | None = None,
 ) -> None:
     """Format a Planka action and send it to the given Telegram chat.
     Only sends to chats in allowed_chat_ids (if provided). Never broadcasts to users who started the bot.
@@ -75,7 +76,7 @@ async def format_and_send(
     card_name = str(card.get("name") or "Untitled")
     card_url = f"{base_url.rstrip('/')}/cards/{card_id}" if card_id else base_url
 
-    author = _resolve_author(user_id, users)
+    author = author_override or _resolve_author(user_id, users)
 
     if action_type == "createCard":
         to_list = data.get("toList") or data.get("list") or {}
